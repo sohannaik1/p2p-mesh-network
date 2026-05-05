@@ -40,15 +40,15 @@ func main() {
 	// Start a goroutine to print whatever the channel finds
 	go func() {
 		for entry := range entriesCh {
-			fmt.Printf("Found Peer! Name: %s | IP: %v | Port: %d\n", entry.Name, entry.AddrV4, entry.Port)
-			address := fmt.Sprintf("%s:%d", entry.AddrV4, entry.Port)
-			conn, err := net.Dial("tcp", address)
-			if err != nil {
-				print("Dial failed: ", err)
-				continue
-			}
-			fmt.Fprintf(conn, "Hello form Sohan-Arch\n")
-			defer conn.Close()
+			func(e *mdns.ServiceEntry) {
+				address := fmt.Sprintf("%s:%d", e.AddrV4, e.Port)
+				conn, err := net.Dial("tcp", address)
+				if err != nil {
+					return
+				}
+				defer conn.Close()
+				fmt.Fprintf(conn, "Hello form Sohan-Arch\n")
+			}(entry)
 		}
 	}()
 
