@@ -4,7 +4,9 @@ import (
 	"bufio"
 	"flag"
 	"fmt"
+	"io"
 	"net"
+	"os"
 	"strings"
 	"sync"
 
@@ -13,7 +15,7 @@ import (
 
 type PeerInfo struct {
 	Name string `json:"name"`
-	Ip   string `json:"ip"`
+	IP   string `json:"ip"`
 	Port int    `json:"port"`
 }
 
@@ -45,12 +47,24 @@ func main() {
 		for {
 			conn, err := ln.Accept()
 			if err != nil {
-				fmt.Println("Error accepting connections. ", err)
 				continue
 			}
-			fmt.Println("New peer connected from:", conn.RemoteAddr())
-			message, _ := bufio.NewReader(conn).ReadString('\n')
-			fmt.Print("Message received : ", message)
+
+			reader := bufio.NewReader(conn)
+			fileName, _ := reader.ReadString('\n')
+			fileName = strings.TrimSpace(fileName)
+
+			newFile, err := os.Create("received_" + fileName)
+			if err != nil {
+				fmt.Println("File creation error:", err)
+				conn.Close()
+				continue
+			}
+			_, err = io.Copy(newFile, reader)
+			if err == nil {
+				fmt.Printf("[SUCCESS] Received file: %s from %s \n", fileName, conn.RemoteAddr())
+			}
+			newFile.Close()
 			conn.Close()
 		}
 	}()
@@ -77,7 +91,7 @@ func main() {
 				// c. The new entry is saved in the map if it already does not exist in map.
 				peers[entry.Name] = PeerInfo{
 					Name: entry.Name,
-					Ip:   entry.AddrV4.String(),
+					IP:   entry.AddrV4.String(),
 					Port: entry.Port,
 				}
 				mu.Unlock() // Unlock after writing the map
@@ -89,8 +103,20 @@ func main() {
 					if err != nil {
 						return
 					}
-					fmt.Fprintf(conn, "Hello from %s\n", *namePtr)
-					conn.Close()
+					defer conn.Close()
+
+					file, err := os.Open("secret.txt")
+					if err != nil {
+						fmt.Println("Error: Please create secret.txt file first")
+						return
+					}
+					defer file.Close()
+
+					fmt.Fprintln(conn, "secret.txt") // sends file name+\n
+					_, err = io.Copy(conn, file)
+					if err == nil {
+						fmt.Printf(">>Sent secret.txt to %s\n", e.Name)
+					}
 				}(entry)
 			} else {
 				mu.Unlock() // Unlock map if we aleady know the peer.
