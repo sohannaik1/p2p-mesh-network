@@ -89,35 +89,13 @@ func main() {
 
 			if !alreadyExists {
 				// c. The new entry is saved in the map if it already does not exist in map.
-				peers[entry.Name] = PeerInfo{
-					Name: entry.Name,
+				shortName := strings.Split(entry.Name, ".")[0]
+				peers[shortName] = PeerInfo{
+					Name: shortName,
 					IP:   entry.AddrV4.String(),
 					Port: entry.Port,
 				}
 				mu.Unlock() // Unlock after writing the map
-
-				// d. Dialing
-				go func(e *mdns.ServiceEntry) {
-					address := fmt.Sprintf("%s:%d", e.AddrV4, e.Port)
-					conn, err := net.Dial("tcp", address)
-					if err != nil {
-						return
-					}
-					defer conn.Close()
-
-					file, err := os.Open("secret.txt")
-					if err != nil {
-						fmt.Println("Error: Please create secret.txt file first")
-						return
-					}
-					defer file.Close()
-
-					fmt.Fprintln(conn, "secret.txt") // sends file name+\n
-					_, err = io.Copy(conn, file)
-					if err == nil {
-						fmt.Printf(">>Sent secret.txt to %s\n", e.Name)
-					}
-				}(entry)
 			} else {
 				mu.Unlock() // Unlock map if we aleady know the peer.
 			}
@@ -129,5 +107,71 @@ func main() {
 	mdns.Lookup("_p2p-mesh._tcp", entriesCh)
 
 	// keep program alive
-	select {}
+	fmt.Println("\n--- P2P Mesh Terminal ---")
+	fmt.Println("Commands: 'list' (See peers), 'send [peer_name] [file_name]'")
+	scanner := bufio.NewScanner(os.Stdin)
+	for {
+		fmt.Print("> ")
+		if !scanner.Scan() {
+			break
+		}
+		line := scanner.Text()
+		args := strings.Split(line, " ")
+		switch args[0] {
+		case "list":
+			mu.Lock()
+			fmt.Printf("\n --- Active Peers (%d) ---", len(peers))
+			for name, info := range peers {
+				fmt.Printf("- %s (%s:%d)", name, info.IP, info.Port)
+			}
+			mu.Unlock()
+		case "send":
+			if len(args) > 3 {
+				fmt.Println("Usage: send [peer_name] [file_name]")
+				continue
+			}
+			targetPeer := args[1]
+			targetFile := args[2]
+			go handleManualSend(targetPeer, targetFile)
+
+		default:
+			fmt.Println("Unkown command. Use 'list' or 'send'.")
+		}
+	}
+}
+
+func handleManualSend(targetPeer string, fileName string) {
+	// a. look if the peer exists
+	mu.Lock()
+	peerInfo, exists := peers[targetPeer]
+	mu.Unlock()
+	if !exists {
+		fmt.Printf("Error: Peer '%s' not found. Type 'list' to see active peers.\n", targetPeer)
+		return
+	}
+	// b. open file before dialing
+	file, err := os.Open(fileName)
+	if err != nil {
+		fmt.Printf("Error: Could not open file '%s': %v\n", fileName, err)
+		return
+	}
+	defer file.Close()
+	// c. dial the peer using ip and port in the map
+	address := fmt.Sprintf("%s:%d", peerInfo.IP, peerInfo.Port)
+	fmt.Printf("Dialing %s at %s... \n", targetPeer, address)
+	conn, err := net.Dial("tcp", address)
+	if err != nil {
+		fmt.Printf("Error: Could not connect to %s: %v", targetPeer, err)
+		return
+	}
+	defer conn.Close()
+	// d. Send file name follwed by a newline(\n)
+	fmt.Fprintln(conn, fileName)
+	// e. Stream file contents
+	_, err = io.Copy(conn, file)
+	if err != nil {
+		fmt.Printf("Error while sending file: %v\n", err)
+		return
+	}
+	fmt.Printf("[SUCCESS] send %s to %s!\n", fileName, targetPeer)
 }
