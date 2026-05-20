@@ -49,23 +49,53 @@ func main() {
 			if err != nil {
 				continue
 			}
-
-			reader := bufio.NewReader(conn)
-			fileName, _ := reader.ReadString('\n')
-			fileName = strings.TrimSpace(fileName)
-
-			newFile, err := os.Create("received_" + fileName)
-			if err != nil {
-				fmt.Println("File creation error:", err)
-				conn.Close()
-				continue
-			}
-			_, err = io.Copy(newFile, reader)
-			if err == nil {
-				fmt.Printf("[SUCCESS] Received file: %s from %s \n", fileName, conn.RemoteAddr())
-			}
-			newFile.Close()
-			conn.Close()
+			go func(c net.Conn) {
+				defer c.Close()
+				reader := bufio.NewReader(c)
+				// 1.Read FileName and FileSize
+				fileName, _ := reader.ReadString('\n')
+				fileName = strings.TrimSpace(fileName)
+				sizeStr, _ := reader.ReadString('\n')
+				sizeStr = strings.TrimSpace(sizeStr)
+				// convert the size string back into a number (int64)
+				var totalSize int64
+				fmt.Sscanf(sizeStr, "%d", &totalSize)
+				fmt.Printf("\n[Incoming] Receiving '%s' (%d bytes) from %s...\n", fileName, totalSize, c.RemoteAddr())
+				// 2. Create the destination file
+				newFile, err := os.Create("recieved_" + fileName)
+				if err != nil {
+					fmt.Println("File creation err:", err)
+					return
+				}
+				defer newFile.Close()
+				// 3. Custom buffer loop to rea ddatat chunks and track progress
+				buffer := make([]byte, 32768) // 32 KB chunk size
+				var totalBytesReceived int64 = 0
+				for {
+					bytesRead, readErr := reader.Read(buffer)
+					if bytesRead > 0 {
+						// Write the incoming chunk to disk
+						_, writeErr := newFile.Write(buffer[:bytesRead])
+						if writeErr != nil {
+							fmt.Println("\nDisk write error:", writeErr)
+							return
+						}
+						// Track progress
+						totalBytesReceived += int64(bytesRead)
+						percentage := (float64(totalBytesReceived) / float64(totalSize)) * 100
+						// print live update
+						fmt.Printf("\rReceiving Progress: %.2f%% (%d/%d bytes)", percentage, totalBytesReceived, totalSize)
+					}
+					if readErr == io.EOF {
+						break
+					}
+					if readErr != nil {
+						fmt.Println("\nNetwork error while receiving:", readErr)
+						return
+					}
+				}
+				fmt.Printf("\n[SUCCESS] Fully received: %s\n", fileName)
+			}(conn)
 		}
 	}()
 
@@ -126,13 +156,15 @@ func main() {
 			}
 			mu.Unlock()
 		case "send":
-			if len(args) > 3 {
+			if len(args) != 3 {
 				fmt.Println("Usage: send [peer_name] [file_name]")
 				continue
 			}
 			targetPeer := args[1]
 			targetFile := args[2]
-			go handleManualSend(targetPeer, targetFile)
+			go func(p string, f string) {
+				handleManualSend(p, f)
+			}(targetPeer, targetFile)
 
 		default:
 			fmt.Println("Unkown command. Use 'list' or 'send'.")
@@ -174,6 +206,7 @@ func handleManualSend(targetPeer string, fileName string) {
 	defer conn.Close()
 	// e. Send file name follwed by a newline(\n)
 	fmt.Fprintln(conn, fileName)
+	fmt.Fprintln(conn, totalSize)
 	// New custom buffer streamignn loop replacing io.copy
 	buffer := make([]byte, 32768)
 	var totalBytesSent int64 = 0
@@ -200,5 +233,5 @@ func handleManualSend(targetPeer string, fileName string) {
 			return
 		}
 	}
-	fmt.Printf("[SUCCESS] send %s to %s!\n", fileName, targetPeer)
+	fmt.Printf("\n[SUCCESS] sent %s to %s!\n", fileName, targetPeer)
 }
