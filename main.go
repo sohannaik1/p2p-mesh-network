@@ -120,9 +120,9 @@ func main() {
 		switch args[0] {
 		case "list":
 			mu.Lock()
-			fmt.Printf("\n --- Active Peers (%d) ---", len(peers))
+			fmt.Printf("\n --- Active Peers (%d) ---\n", len(peers))
 			for name, info := range peers {
-				fmt.Printf("- %s (%s:%d)", name, info.IP, info.Port)
+				fmt.Printf("- %s (%s:%d)\n", name, info.IP, info.Port)
 			}
 			mu.Unlock()
 		case "send":
@@ -156,7 +156,14 @@ func handleManualSend(targetPeer string, fileName string) {
 		return
 	}
 	defer file.Close()
-	// c. dial the peer using ip and port in the map
+	// c. get the total file size before sending.
+	fileInfo, err := file.Stat()
+	if err != nil {
+		fmt.Println("Error getting file status:", err)
+		return
+	}
+	totalSize := fileInfo.Size()
+	// d. dial the peer using ip and port in the map
 	address := fmt.Sprintf("%s:%d", peerInfo.IP, peerInfo.Port)
 	fmt.Printf("Dialing %s at %s... \n", targetPeer, address)
 	conn, err := net.Dial("tcp", address)
@@ -165,13 +172,33 @@ func handleManualSend(targetPeer string, fileName string) {
 		return
 	}
 	defer conn.Close()
-	// d. Send file name follwed by a newline(\n)
+	// e. Send file name follwed by a newline(\n)
 	fmt.Fprintln(conn, fileName)
-	// e. Stream file contents
-	_, err = io.Copy(conn, file)
-	if err != nil {
-		fmt.Printf("Error while sending file: %v\n", err)
-		return
+	// New custom buffer streamignn loop replacing io.copy
+	buffer := make([]byte, 32768)
+	var totalBytesSent int64 = 0
+	for {
+		bytesRead, readErr := file.Read(buffer)
+		if bytesRead > 0 {
+			// write exactly the amount of bytes we read into the network connection
+			_, writeErr := conn.Write(buffer[:bytesRead])
+			if writeErr != nil {
+				fmt.Printf("\nNetwork error during transfer: %v\n", writeErr)
+				return
+			}
+			// update counter and calculate progress of file transfer
+			totalBytesSent += int64(bytesRead)
+			percentage := (float64(totalBytesSent) / float64(totalSize)) * 100
+			fmt.Printf("\rProgress: %.2f%% (%d/%d bytes)", percentage, totalBytesSent, totalSize)
+		}
+		// check if we hit end of file
+		if readErr == io.EOF {
+			break
+		}
+		if readErr != nil {
+			fmt.Printf("\nError reading file: %v\n", readErr)
+			return
+		}
 	}
 	fmt.Printf("[SUCCESS] send %s to %s!\n", fileName, targetPeer)
 }
